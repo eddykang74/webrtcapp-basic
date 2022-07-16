@@ -1,0 +1,762 @@
+<!DOCTYPE html>
+
+<html>
+    <head>
+        <title>일대일화상통화-샘플</title>
+    </head>
+
+    <body>
+        <h1>일대일 화상통화 샘플1</h1>
+        채팅방:<input type="text" id="room" value="WebRTCRoom1" style="width:150px;height:30px">
+        <input type="button" id="btnEntry" value="입장">
+        <input type="button" id="btnExit" value="퇴장">
+        채팅 닉네임:<input type="text" id="nickname" value="" style="width:150px;height:30px"><br>
+
+        <hr>
+        <input type="button" id="btnCamera" value="카메라끄기 / 커기">
+        <input type="button" id="btnMic" value="마이크 끄기 /커기">
+        <input type="button" id="btnDisplayShare" value="화면공유">
+        <input type="button" id="btnRecord" value="녹화하기">
+        <hr>
+
+        화상통화 통신 로깅정보<br>
+        <ul id="chatHistory">
+        </ul>
+
+        <div>
+            <canvas id="canvas"  style="position:absolute;left:0;z-index:2000;border: 3px solid red;width:98%;height: 400px;"></canvas>
+
+            <video id="remoteVideo" autoplay playsinline 
+            style="width:98%;height: 400px;position: absolute;border:1px red solid;left:5px;right:10px;"></video>
+
+            <video id="localVideo"   autoplay muted playsinline 
+            style="z-index:500;width:150px;height:150px;display: block;position:absolute;right:30px;bottom:20px;border:1px blue solid;"></video>
+        </div>
+
+
+
+
+        <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+           
+        <!-- socket.io javascript client library 참조  -->
+        <script src="/socket.io/socket.io.js"></script>
+
+        <!-- WEBRTC 클라이언트 지원 js 라이브러리 -->
+        <script src="/js/adapter-latest.js"></script>
+
+
+
+
+        <script>
+            //클라이언트(웹브라우저) 서버 연결 소켓 객체 정의 
+            //서버 socket과 연결이 자동 연결된다.
+            var socket = io.connect('/');
+
+
+            //WebRTC 전역 주요 객체 정의 및 할당
+
+            //현재사용자의 로컬 비디어 태그요소
+            var localVideo = "";
+
+            //원격 사용자의 비디오를 표현할 비디오 태그요소
+            var remoteVideo ="";
+
+            //로컬 비디오/오디오 데이터 스트림을 저장할 스트림객체
+            var localStream;
+
+            //화면공유 스트림
+            var screenStream;
+
+            //원격 사용자의 비디오/오디오 데이터 스트림을 저장할 원격 스트림객체
+            var remoteStream;
+            var pc; //peerConnection 객체를 저장할 젼역 변수
+
+
+            //화상통화 초기화 완료여부
+            //Caller사용자만 이용하고 Callee에게 통화 호출(doCall)가능한 상태인지 여부 관리 
+            var isInitiator = false;
+
+            //1:1 채팅방 연결 완료여부: 모두입장완료여부 
+            var isChannelReady = false;
+
+            //미디어기반 화상통화 상호 연결 완료상태여부: 화상통화중여부
+            var isStarted = false;
+            
+            var chatRoomId ="";
+
+            var mobileTypeName ="";
+            
+            var pcConfig = {
+                iceServers: [
+                    {
+                    urls: "stun:coturn.webrtcmaker.com:3478",
+                    },
+                    {
+                    urls: "turn:coturn.webrtcmaker.com:3478",
+                    credential: "gabriel",
+                    username: "msoftware",
+                    },
+                    {
+                    urls: "turn:coturn.webrtcmaker.com:3478?transport=udp",
+                    credential: "gabriel",
+                    username: "msoftware",
+                    },
+                    {
+                    urls: "turn:coturn.webrtcmaker.com:3478?transport=tcp",
+                    credential: "gabriel",
+                    username: "msoftware",
+                    },
+                ],
+                iceTransportPolicy: "all",
+            };
+
+
+            $(document).ready(function(){
+
+                $("#nickname").val("user-"+Math.random().toString().substr(0,3));
+                $("#msg").focus();
+
+                $("#localVideo").attr("poster", "https://health-test.webrtcmaker.com/img/pc-mr-camera-off.jpg");
+
+                //비디오 태그를 태그변수에 할당한다.
+                localVideo = document.querySelector("#localVideo");
+                remoteVideo = document.querySelector("#remoteVideo");
+                chatRoomId = document.getElementById("room").value;
+
+                //웹브라우저의 navigator.mediaDevices 객체를 이용해 현재 디바이스의 미디어(카메라/마이크) 정보를 가져온다.
+                //getUserMedia가 호출되면 웹브라우저가 사용자에게 카메라/마이크 접근허용을 묻는다
+                //허용하면 카메라와 마이크를통해 미디어 스트림데이터가 콜백함수로 전달됩니다.
+                navigator.mediaDevices.getUserMedia({audio:true,video:true})
+                .then(function(stream){
+                    //비디오/오디오 스트림이 전달된다.
+
+                    //물리 카메라/마이크에서 전달된 스트림데이터를 로컬스트림 변수에 할당한다.
+                    localStream = stream;
+
+                    //로컬미디어스트림을 로커 비디오 html태그에 스트림 소스로 할당한다.
+                    localVideo.srcObject = localStream;
+
+                }).catch(function(err){
+                    console.log("기기를 사용할수 없습니다.카메라/마이크에 대한 권한설정을 확인해주세요.");
+                });
+
+
+
+
+
+
+
+
+
+
+
+                //메시지 전송버튼 클릭시 서버로 메시지 전송
+                $("#btnSend").click(function(){
+
+                    const roomName = $("#room").val();
+                    const nickName = $("#nickname").val();
+                    const msg = $("#msg").val();
+
+                    socket.emit("send",roomName,nickName,msg);
+                });
+
+                //채팅방 입장처리
+                $("#btnEntry").click(function(){
+                    const roomName = $("#room").val();
+                    const nickName = $("#nickname").val();
+                    const msg = $("#msg").val();
+
+                    socket.emit("entryRoom",roomName,nickName);
+                });
+
+            });
+
+
+            //채팅방 입장완료 이벤트 수신기 
+            //userCnt를 기반으로 입장수를 체크하여 다음 화상통화프로세스를 진행한다.
+            socket.on("entryResult",function(msg,userCnt){
+                $("#chatHistory").append(`<li>${msg}:현재접속자수:${userCnt}</li>`);
+
+                if(userCnt == 1){
+                    console.log("다른 사용자와의 통화를 위해 대기중입니다.");
+                }else if(userCnt == 2){
+                    console.log("모든 사용자가 입장을 완료했습니다.");
+                    console.log("나는 Callee입니다.");
+
+                    //Callee의 isChannelReady 상태변경:모두입장완료
+                    isChannelReady = true;
+
+                    //peerConnection 객체를 생성하고 피어간 통신이 가능한지 체크하는 함수 
+                    maybeStart();
+
+                    //처음 입장한 사람에게 got user media 발신-처음입장한 사람이 CALLER가 됨
+                    //Callee가 Caller에게 SDP 협상 요청 시작하기
+                    //Caller는 maybeStart() 실행조건이 충족되어 있는 상태임.otherjoined에 의해 Caller는 통화준비상태완료
+                    sendMessage("got user media");
+                }
+            });
+
+            //1:1화상통화 채팅방에 먼저 입장한 사용자(Caller)만 수신받는다.
+            socket.on("entryOk",function(msg,userCnt){
+                $("#chatHistory").append(`<li>${msg}:현재접속자수:${userCnt}</li>`);
+                console.log("나는 Caller입니다.");
+
+                //화상통화 미디어 정보 교환 및 통신 협상 시작하기
+                isInitiator = true;
+                isChannelReady = true;
+            });
+
+
+            //1:1 화상채팅 클라이언트 메시시 수신기
+            socket.on("message", function (message) {
+
+                try{
+                    //console.log("Client received message:", message);
+
+                    if (message === "got user media") {
+                        //console.log("got user media==================>", message);
+                        maybeStart();
+                    } else if (message.type === "offer") {
+                        //console.log("offer==================>", message);
+                        //console.log(">>>>>>>>>>>>>>>>receive offer sdp:", message.sdp);
+
+                        if (!isInitiator && !isStarted) {
+                            maybeStart();
+                        }
+
+                        //Caller에서 보내준 SDP정보를 Callee의 pc.setRemoteDescription()메소드를 이용해 저장한다.
+                        pc.setRemoteDescription(new RTCSessionDescription(message));
+                        
+                        //Callee가 Caller에게 본인의 SDP정보를 추출해서 로컬에 세팅후 Caller에게 전송
+                        doAnswer();
+
+                    } else if (message.type === "answer" && isStarted) {
+                        //console.log("answer==================>", message);
+                        //console.log(">>>>>>>>>>>>>>>>receive answer sdp:", message.sdp);
+                        pc.setRemoteDescription(new RTCSessionDescription(message));
+
+                    } else if (message.type === "candidate" && isStarted) {
+                        //console.log("candidate==================>", message);
+                        //console.log("상세 아이스후보 정보수신=======>:",message.candidate);
+                        var candidate = new RTCIceCandidate({
+                        sdpMLineIndex: message.label,
+                        candidate: message.candidate,
+                        });
+
+                        try {
+
+                        pc.addIceCandidate(candidate);
+
+                        } catch (err) {
+                        console.log("무시된 Candiate후보 목록");
+                        }
+
+                    } else if (message === "bye" && isStarted) {
+                    handleRemoteHangup();
+                    }
+                }catch(err){
+                    console.log("에러발생............. 목록");
+                }
+
+            });
+
+
+            //peerConnection객체를 진행상태에 맞게 생성관리해주는 함수
+            function maybeStart(){
+
+                //화상통화는 아직 미게시이고 비디오 로컬스트림은 연결된 상태이면서 채팅방에 모두 입장완료한경우 
+                if (!isStarted && typeof localStream !== "undefined" && isChannelReady) {
+
+                    console.log(">>>>>> creating peer connection");
+
+                    //PeerConnection 객체 생성
+                    createPeerConnection();
+
+                    //로컬 스트림 pc에 추가
+                    for (const track of localStream.getTracks()) {
+                        pc.addTrack(track, localStream);
+                    }
+
+                    isStarted = true;
+
+                    if (isInitiator) {
+                        console.log(">>>>>>>>>>>>>>>>>>>>>>> Caller doCall");
+
+                        //Caller가 Callee에게 본인의 미디어 스펙정보를 추출(SDP)를 추출해 보인 로컬 SDP를 세팅후 Callee에게
+                        //SDP정보를 전달한다.
+                        //Offer진행
+                        doCall();
+                    }
+                }
+            }
+
+
+            //RTC SDF 전달 미디어 정보교환 협상 요청
+            //Caller가 Callee에게 본인의 미디어환경정보를 SDF객체로 만들고 본인의 로컬SDP로 정보로 먼저 세팅후 Callee에게 전달한다.
+            //SDP OFFER과정 진행 
+            function doCall() {
+                console.log("Sending offer to peer");
+                //alert("caller");
+
+                //본인의 기본 미디어 환경정보(SDP)정보를 추출해 로컬세팅 후 소켓을 통해 Calllee에게 Caller의 SDP정보를 전달한다.
+                //Offer과정
+                pc.createOffer(setLocalAndSendMessage, handleCreateOfferError);
+            }
+
+
+            //RTC 통신응답 처리함수
+            //Callee가 Caller에게 본인의 로컬에 먼저세팅 후 SDP정보를 전송한다.
+            function doAnswer() {
+                console.log("Sending answer to peer.");
+
+
+                pc.createAnswer().then(
+                    setLocalAndSendMessage,
+                    onCreateSessionDescriptionError
+                );
+            }
+
+
+            //연결세션정보 로깅 및 메시지 처리
+            function setLocalAndSendMessage(sessionDescription) {
+
+                if (sessionDescription.type == "offer") {
+                    //console.log(">>>>>>>>>>>>>>>>send offer sdp", sessionDescription.sdp);
+
+                    //Caller가 iPhone 사용자의 경우 스트림을 대화상대에서 녹화파일 비디오가로세로방향 오작동 버그수정 sdp내용 변경적용
+                    //IPHONE 발송 비디오가 상대 안드로이드폰에 가로세로 오작동되어 보여지는것 방지코드
+                    var sdpData = sessionDescription.sdp.replace(
+                        /a=extmap:\d+ urn:3gpp:video-orientation(:\d)?\r\n/g,
+                        ""
+                    );
+
+                    //Caller아이폰사용자의 경우 코덱을 VP8로 우선적용되게 처리- 녹화파일 비디오/음성 씽크 안맞는 이슈 IPhone 우선적용코덱 순서를 VP8로 최상위로 변경
+                    if (mobileTypeName == "iPhone") {
+                        sdpData = sdpToReplacePreferCodec(sdpData, /m=video(:?.*)?/, "VP8");
+                    }
+
+                    sessionDescription.sdp = sdpData;
+                }
+
+                if (sessionDescription.type == "answer") {
+                    //console.log(">>>>>>>>>>>>>>>>send answer sdp", sessionDescription.sdp);
+
+                    //Callee가 iPhone 사용자의 경우 스트림을 대화상대에서 녹화파일 비디오가로세로방향 오작동 버그수정 sdp내용 변경적용
+                    //IPHONE 발송 비디오가 상대 안드로이드폰에 가로세로 오작동되어 보여지는것 방지코드
+                    var sdpData = sessionDescription.sdp.replace(
+                        /a=extmap:\d+ urn:3gpp:video-orientation(:\d)?\r\n/g,
+                        ""
+                    );
+
+                    sessionDescription.sdp = sdpData;
+                }
+
+                //추출된 SDP정보를 본인의 PeerConnection객체에 setLocalDescription()메소드를 이용해 먼저 저장한다.
+                pc.setLocalDescription(sessionDescription);
+
+                //본인의 SDP정보를 서버소켓으로 보내 Callee에게 전달한다.
+                sendMessage(sessionDescription);
+            }
+
+                        
+
+
+            //1:1 화상채팅 서버 메시시 보내기
+            function sendMessage(message) {
+                //console.log("Client sending message: ", message);
+                socket.emit("message",chatRoomId, message);
+            }
+
+
+
+            //1:1 화상채팅 피어연결 생성처리 함수
+            function createPeerConnection() {
+                try {
+                    
+                    //RTCPeerConnection객체생성시 STUN/TURN서버 연결구성정보를 생성자값으로 전달해 객체를 생성한다.
+                    pc = new RTCPeerConnection(pcConfig);
+
+                    //피어와 피어간의 최적화된 네트워크정보(공인아이피주소/포트) 공유하여 통신연결을 돕는다.
+                    //공인아이피가 새로 할당되거나 변경되면 발생하는 이벤트 
+                    pc.onicecandidate = handleIceCandidate;
+
+                    //로컬또는 원격 미디어 스트림(트랙) 추가될떄 발생하는 이벤트 및 이벤트 처리기 
+                    pc.onaddstream = handleRemoteStreamAdded;
+
+                    //기저장된 미디어스트림이 제거되는경우 발생하는 이벤트 및 이벤트 처리기 
+                    //pc.onremovestream = handleRemoteStreamRemoved;
+
+                    //이벤트 기반 Offer 처리
+                    //SDP 오퍼를 기반으로 미디어 스펙 교환협상이 발생할때 오퍼시 제공되는 SDP정보를 강제로 변조하는 이벤트 처리기 
+                    // pc.onnegotiationneeded = async (options) => {
+
+                    //     var sessionDescription = await pc.createOffer(options);
+                    //     var sdpData = sessionDescription.sdp.replace(
+                    //         /a=extmap:\d+ urn:3gpp:video-orientation(:\d)?\r\n/g,
+                    //         "");
+
+                    //     //Caller아이폰사용자의 경우 코덱을 VP8로 우선적용되게 처리- 녹화파일 비디오/음성 씽크 안맞는 이슈 IPhone 우선적용코덱 순서를 VP8로 최상위로 변경
+                    //     if (mobileTypeName == "iPhone") {
+                    //         sdpData = sdpToReplacePreferCodec(sdpData, /m=video(:?.*)?/, "VP8");
+                    //     }
+
+                    //     sessionDescription.sdp = sdpData;
+
+                    //     await pc.setLocalDescription(sessionDescription);
+                    //     sendMessage(sessionDescription);
+                    // };
+                    
+
+                    //화상통화 peerConnection 연결상태가 변경될떄 발생하는 이벤트 
+                    //pc.onconnectionstatechange = handleConnectionChanged;
+
+                    //console.log("Created RTCPeerConnnection");
+                } catch (e) {
+                    //console.log("Failed to create PeerConnection, exception: " + e.message);
+                    alert("Cannot create RTCPeerConnection object.");
+                    return;
+                }
+            }
+
+
+
+            //상대 화상채팅 미디어 스트림 연결완료: 실제화상채팅시작
+            function handleRemoteStreamAdded(event) {
+                //console.log("상대 화상채팅 미디어 스트림 연결 완료 pc.onaddstream===============>");
+                remoteStream = event.stream;
+                remoteVideo.srcObject = remoteStream;
+            }
+
+            //원격스트림이 제거될떄 발생
+            function handleRemoteStreamRemoved(event) {
+                console.log("Remote stream removed. Event: ", event);
+            }
+
+
+            //IceCandidate처리
+            function handleIceCandidate(event) {
+            //console.log('아이스후보이벤트발생1=============>');
+            if (event.candidate) {
+                //console.log('아이스후보이벤트발생2-event.candidate=============>',event);
+
+                //sendMessage(event);
+
+                //서버로 메시지 발송하기
+                sendMessage({
+                type: "candidate",
+                label: event.candidate.sdpMLineIndex,
+                id: event.candidate.sdpMid,
+                candidate: event.candidate.candidate,
+                });
+            } else {
+                //console.log("End of candidates.");
+            }
+            }
+
+
+
+            //화상통화 연결상태 변경감지
+            //안드로이드 크롬의 경우 비활성화시에도 소켓및 화상통화 종료됨
+            function handleConnectionChanged(event) {
+                console.log("pc.onconnectionstatechange========>",pc.connectionState);
+
+                switch (pc.connectionState) {
+                    case "connecting":
+                    //console.log("pc.connecting-",callerInfo);
+                    break;
+                    case "connected":
+                    //console.log("pc.connected-",callerInfo);
+                    if(isNetworkConnection > 1){
+                        console.log("pc.connected-",callerInfo,"소켓 재연결됨..");
+
+                        remoteVideo.srcObject = null;
+                        remoteVideo.srcObject = remoteStream;
+                    }
+                    break;
+                    case "disconnected":
+                    //console.log("pc.disconnected-",callerInfo);
+                    break;
+                    case "failed":
+                    //isStarted = false;
+                    //console.log("pc.failed======================>",callerInfo);
+                    //화상통화 연결 실패시 : 16초 restartIce진행- 계속반복적으로 통화 연결시도 진행함
+                    //pc.restartIce();  
+                    break;
+                    case "closed":
+                    //console.log("pc.closed-",callerInfo);
+                    break;
+                }
+            }
+
+
+            //오퍼 발생에러 처리 핸들러
+            function handleCreateOfferError(event) {
+                console.log("createOffer() error: ", event);
+            }
+
+
+            //ANSWER SDP 추출시 에러처리 핸들러
+            function onCreateSessionDescriptionError(error) {
+                //trace("Failed to create session description: " + error.toString());
+            }
+            
+
+            //일대일 채팅방 입장 실패 
+            socket.on("entryDeny",function(msg){
+                $("#chatHistory").append(`<li>${msg}</li>`);
+            });
+
+
+        </script>
+    
+
+        <script src="/js/mouse.js"></script>
+
+        <!-- 마이크-카메라 제어하기  -->
+        <script>
+
+            var isCameraActive = true;
+            var isMicActive = true;
+            var isShareDisplay = false;
+            var isRecording = false;
+
+            var recordedBlobs;
+            var mediaRecorder;
+
+            $("#btnCamera").click(function(){
+
+                if(isCameraActive){
+                    //로컬 카메라 끄기처리
+                    localStream.getVideoTracks()[0].enabled = false;
+                    $("#localVideo").attr("poster", "https://health-test.webrtcmaker.com/img/pc-mr-camera-off.jpg");
+                    isCameraActive = false;
+
+                }else{
+                   //로컬 카메라 활성화하기 
+                   localStream.getVideoTracks()[0].enabled = true;
+                   isCameraActive = true;
+                }
+
+            });
+
+
+            $("#btnMic").click(function(){
+
+                if(isMicActive){
+                    //로컬 마이크 끄기처리
+                    localStream.getAudioTracks()[0].enabled = false;
+                    isMicActive = false;
+
+                }else{
+                   //로컬 마이크 활성화하기 
+                   localStream.getAudioTracks()[0].enabled = false;
+                   isMicActive = true;
+                }
+            });
+
+
+            //화면공유하기 이벤트 처리 
+            $("#btnDisplayShare").click(function(){
+
+                if(isShareDisplay){
+                    //화면공유해제
+
+                    if (screenStream !== null) {
+                        var tracks = screenStream.getTracks();
+                        for (var i = 0; i < tracks.length; i++) tracks[i].stop();
+                    }
+
+                    //로컬 비디오로 대체
+                    localVideo.srcObject = localStream;
+
+                    var localVideoTrack = null;
+                    localVideoTrack = localStream.getTracks().find(function (track) {
+                        return track.kind === "video";
+                    });
+
+                    //피어 기존 화면공유 비디오 트랙을 미디어 비디오 트랙으로 바꾸기
+                    pc.getSenders().map(function (sender) {
+                    //console.log("화면공유종료 - PC 트랙들:==========>", sender.track);
+
+                    if (sender.track != null && sender.track.kind == "video") {
+                        //화상공유 비디오 트랙을 카메라 비디오 트랙으로 변경
+                        sender.replaceTrack(localVideoTrack);
+                    }
+                    });
+
+                    isShareDisplay = false;
+
+                }else{
+                     //화면공유하기적용
+                     navigator.mediaDevices.getDisplayMedia({ audio: true, video: true })
+                     .then(handleDisplaySuccess, handleDisplayError);
+
+
+                     //그리기 환경 구성하기
+
+
+
+                     isShareDisplay = true;
+                }
+            });
+
+
+            //화면공유 적용
+            function handleDisplaySuccess(stream) {
+    
+
+                //화면공유 비디오 좌우반전 기능제거
+                $("#localVideo").css("transform", "rotateY(0deg)");
+                $("#localVideo").css("-webkit-transform", "rotateY(0deg)");
+                $("#localVideo").css("-moz-transform", "rotateY(0deg)");
+
+                screenStream = stream;
+                localVideo.srcObject = screenStream;
+
+        
+                //화면공유 종료 이벤트
+                screenStream.getVideoTracks()[0].addEventListener("ended", () => {
+                    console.log("화면공유가 종료되었습니다.");
+                });
+
+                //화면공유 비디오 트랙 조회
+                var screenVideoTrack = screenStream.getTracks().find(function (track) {
+                    return track.kind === "video";
+                });
+
+                //피어 기존 비디오 트랙을 화면공유 비디오 트랙으로 바꾸기
+                pc.getSenders().map(function (sender) {
+                    //console.log("화면공유시작 - PC 트랙들:==========>", sender.track);
+                    if (sender.track != null && sender.track.kind == "video") {
+                    sender.replaceTrack(screenVideoTrack);
+                    }
+                });
+            }
+
+                
+            //화면공유 에러 처리
+            function handleDisplayError(error) {
+                console.log("화면공유가 취소되었습니다.");
+    
+                console.log(`getDisplayMedia error: ${error.name}`, error);
+            }
+
+            //녹화처리하기
+            $("#btnRecord").click(function(){
+
+                if(isRecording){
+                    stopRecording();
+                    isRecording = false;
+
+                }else{
+                    startRecording();
+                    isRecording = true;
+                }
+            });
+
+
+            //녹화시작
+            function startRecording() {
+                recordedBlobs = null;
+                recordedBlobs = [];
+
+                //안드로이드 녹화파일 음성/영상 씽크되게 vp8로수정/ vp9은 씽크에 문제발생
+                var mimeType = "video/webm;codecs=vp8,opus";
+
+                if (mobileTypeName == "iPhone") {
+                    //mimeType = "video/webm;codecs=h264";
+                    mimeType = "video/mp4";
+                }
+
+                //대역폭 젹용 유형: 2000/1000/500/250/125/75
+                //const options = { mimeType };
+
+                //옵션적용해서 파일다운로드 사이즈 줄이기
+                const options = {
+                    mimeType,
+                    audioBitsPerSecond: 60 * 1000,
+                    videoBitsPerSecond: 500 * 1000,
+                };
+
+                try {
+                    mediaRecorder = new MediaRecorder(remoteStream, options);
+                } catch (e) {
+                    alert("mediaRecorder생성에러");
+                    console.error("Exception while creating MediaRecorder:", e);
+                    return;
+                }
+
+                mediaRecorder.onstop = (event) => {
+                    //alert("녹화중지됨.."); //@@
+                };
+
+                //recordedBlobs 파일에 비디오 데이터 저장
+                mediaRecorder.ondataavailable = handleDataAvailable;
+
+                //녹화시작
+                mediaRecorder.start();
+            }
+
+            //녹화중단
+            function stopRecording() {
+                    mediaRecorder.stop();
+            
+                    //2초후 파일 자동 다운로드 실시()
+                    setTimeout(() => {
+                        recordFileDown();
+                    }, 2000);
+                }
+
+            //recordedBlobs 파일에 비디오 데이터 저장
+            function handleDataAvailable(event) {
+                //console.log("handleDataAvailable", event);
+
+                try {
+                    if (event.data && event.data.size > 0) {
+                    recordedBlobs.push(event.data);
+                    }
+                } catch (err) {
+                    alert("녹화데이터 저장에러발생...");
+                }
+            }
+
+
+            //녹화파일 다운로드
+            function recordFileDown() {
+        
+            var exportType = "video/webm";
+            var vodfileName = "vdetailing_1111.webm";
+
+            if (mobileTypeName == "iPhone") {
+                exportType = "video/mp4";
+                vodfileName = "vdetailing_1111.mp4";
+            }
+
+            var blob = new Blob(recordedBlobs, { type: exportType });
+
+            blobDownload(blob, vodfileName);
+        }
+
+
+            //녹화 blog데이터 파일다운로드 :안드로이드/크롬 전용
+            function blobDownload(blobData, vodFileName) {
+
+                let url = window.URL.createObjectURL(blobData);
+                let a = document.createElement("a");
+                a.style.display = "none";
+                a.href = url;
+                a.download = vodFileName;
+                document.body.appendChild(a);
+                a.click();
+
+                setTimeout(() => {
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(url);
+                    //alert("다운로드 초기화완료");
+                }, 500);
+            }
+                
+        </script>
+
+</body>
+</html>
