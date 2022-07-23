@@ -2,6 +2,7 @@ var express = require('express');
 var router = express.Router();
 
 //메인페이지 라우팅 메소드
+//http://naver.com/
 router.get('/', function(req, res, next) {
   res.render('index', { title: 'Express' });
 });
