@@ -13,6 +13,7 @@
         채팅 닉네임:<input type="text" id="nickname" value="" style="width:150px;height:30px"><br>
 
         <hr>
+        <input type="button" id="btnHangup" value="통화종료">
         <input type="button" id="btnCamera" value="카메라끄기 / 커기">
         <input type="button" id="btnMic" value="마이크 끄기 /커기">
         <input type="button" id="btnDisplayShare" value="화면공유">
@@ -32,8 +33,6 @@
             <video id="localVideo"   autoplay muted playsinline 
             style="z-index:500;width:150px;height:150px;display: block;position:absolute;right:30px;bottom:20px;border:1px blue solid;"></video>
         </div>
-
-
 
 
         <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
@@ -113,7 +112,7 @@
 
             $(document).ready(function(){
 
-                $("#nickname").val("user-"+Math.random().toString().substr(0,3));
+                $("#nickname").val("user-"+Math.floor(Math.random()*100).toString());
                 $("#msg").focus();
 
                 $("#localVideo").attr("poster", "https://health-test.webrtcmaker.com/img/pc-mr-camera-off.jpg");
@@ -524,6 +523,22 @@
 
             var recordedBlobs;
             var mediaRecorder;
+
+
+            $("#btnHangup").click(function(){
+             //화상통화연결종료 및 리소스정리
+             if(localStream != null){
+                    localStream.getTracks().forEach((track) => track.stop());
+                }
+
+                if (pc != null) {
+                    pc.close();
+                    pc = null;
+                }
+
+                isInitiator = false;
+                isStarted = false;
+            });
 
             $("#btnCamera").click(function(){
 
